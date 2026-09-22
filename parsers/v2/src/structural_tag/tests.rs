@@ -430,3 +430,64 @@ fn invalid_required_and_named_requests_fail() {
     };
     assert!(QWEN3_CODER.build(&named).is_err());
 }
+
+#[test]
+fn response_schema_without_tool_calls_preserves_reasoning_policy() {
+    let tools = tools();
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {"answer": {"type": "integer"}},
+        "required": ["answer"],
+        "additionalProperties": false
+    });
+    for builder in [&QWEN3_CODER, &DEEPSEEK_DSML, &GLM47] {
+        for (tool_choice, tools) in [
+            (StructuralTagToolChoice::None, tools.as_slice()),
+            (StructuralTagToolChoice::None, &[]),
+            (StructuralTagToolChoice::Auto, &[]),
+        ] {
+            for starts_in_reasoning in [false, true] {
+                for reasoning_boundary in [
+                    ReasoningBoundary::StructuralTag,
+                    ReasoningBoundary::External,
+                ] {
+                    let actual = builder
+                        .build_with_options(
+                            &StructuralTagContext {
+                                tool_choice,
+                                tools,
+                                parallel_tool_calls: None,
+                                schema_mode: StructuralTagSchemaMode::Auto,
+                                structured_output_schema: Some(&schema),
+                                starts_in_reasoning,
+                            },
+                            &StructuralTagOptions {
+                                reasoning_boundary,
+                                tool_arguments_any_order: true,
+                                ..Default::default()
+                            },
+                        )
+                        .unwrap()
+                        .expect("response schema must produce a constraint");
+                    let format = if starts_in_reasoning
+                        && reasoning_boundary == ReasoningBoundary::StructuralTag
+                    {
+                        actual["format"]["elements"]
+                            .as_array()
+                            .unwrap()
+                            .last()
+                            .unwrap()
+                    } else {
+                        &actual["format"]
+                    };
+                    assert_eq!(
+                        format,
+                        &serde_json::json!({
+                            "type": "json_schema", "json_schema": schema, "style": "json"
+                        })
+                    );
+                }
+            }
+        }
+    }
+}

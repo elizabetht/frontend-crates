@@ -42,42 +42,46 @@ impl StructuralTagBuilder {
         context: &StructuralTagContext<'_>,
         options: &StructuralTagOptions,
     ) -> anyhow::Result<Option<Value>> {
-        let policy = match resolve_tool_calling(context)? {
-            ResolvedToolCalling::Disabled => {
-                return build_text_exclusion(self.grammar.tool_call_excludes())
-                    .map(|format| serialize(StructuralTag { format }))
-                    .transpose();
-            }
-            ResolvedToolCalling::Enabled(policy) => policy,
-        };
-        if policy.tools.is_empty() {
-            return Ok(None);
-        }
         let exclude_special_tokens = options
             .exclude_special_tokens
             .unwrap_or_else(|| self.grammar.default_exclude_special_tokens());
 
-        let format = match (policy.mode, context.structured_output_schema) {
-            (ToolCallingMode::Auto, Some(schema)) => {
-                self.grammar.build_auto_with_structured_output(
-                    &policy,
-                    schema,
-                    options.tool_arguments_any_order,
-                )?
+        let format = match resolve_tool_calling(context)? {
+            ResolvedToolCalling::Disabled => match context.structured_output_schema {
+                Some(schema) => response_schema_format(schema),
+                None => {
+                    return build_text_exclusion(self.grammar.tool_call_excludes())
+                        .map(|format| serialize(StructuralTag { format }))
+                        .transpose();
+                }
+            },
+            ResolvedToolCalling::Enabled(policy) if policy.tools.is_empty() => {
+                match context.structured_output_schema {
+                    Some(schema) => response_schema_format(schema),
+                    None => return Ok(None),
+                }
             }
-            (ToolCallingMode::Auto, None) => self.grammar.build_triggered_calls(
-                &policy,
-                exclude_special_tokens,
-                options.tool_arguments_any_order,
-            )?,
-            (ToolCallingMode::Required, _) => self.grammar.build_triggered_calls(
-                &policy,
-                exclude_special_tokens,
-                options.tool_arguments_any_order,
-            )?,
-            (ToolCallingMode::Named, _) => self
-                .grammar
-                .build_tool_calls_only(&policy, options.tool_arguments_any_order)?,
+            ResolvedToolCalling::Enabled(policy) => {
+                match (policy.mode, context.structured_output_schema) {
+                    (ToolCallingMode::Auto, Some(schema)) => {
+                        self.grammar.build_auto_with_structured_output(
+                            &policy,
+                            schema,
+                            options.tool_arguments_any_order,
+                        )?
+                    }
+                    (ToolCallingMode::Auto, None) | (ToolCallingMode::Required, _) => {
+                        self.grammar.build_triggered_calls(
+                            &policy,
+                            exclude_special_tokens,
+                            options.tool_arguments_any_order,
+                        )?
+                    }
+                    (ToolCallingMode::Named, _) => self
+                        .grammar
+                        .build_tool_calls_only(&policy, options.tool_arguments_any_order)?,
+                }
+            }
         };
         let format = if options.reasoning_boundary == ReasoningBoundary::StructuralTag {
             wrap_reasoning_if_needed(
@@ -129,11 +133,7 @@ pub(super) trait ToolCallGrammar: Send + Sync {
         Ok(Format::Or(OrFormat {
             elements: vec![
                 self.build_tool_calls_only(policy, tool_arguments_any_order)?,
-                Format::JsonSchema(JsonSchemaFormat {
-                    json_schema: schema.clone(),
-                    style: JsonSchemaStyle::Json,
-                    any_order: false,
-                }),
+                response_schema_format(schema),
             ],
         }))
     }
@@ -149,6 +149,14 @@ pub(super) trait ToolCallGrammar: Send + Sync {
         policy: &ResolvedToolCallingPolicy<'_>,
         tool_arguments_any_order: bool,
     ) -> anyhow::Result<Format>;
+}
+
+fn response_schema_format(schema: &Value) -> Format {
+    Format::JsonSchema(JsonSchemaFormat {
+        json_schema: schema.clone(),
+        style: JsonSchemaStyle::Json,
+        any_order: false,
+    })
 }
 
 fn build_text_exclusion(excludes: &[&str]) -> Option<Format> {
