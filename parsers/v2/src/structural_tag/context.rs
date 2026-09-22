@@ -60,7 +60,9 @@ pub struct StructuralTagContext<'a> {
     pub tools: &'a [Tool],
     pub parallel_tool_calls: Option<bool>,
     pub schema_mode: StructuralTagSchemaMode,
-    /// Optional final-response schema used as an alternative for `auto` tool choice.
+    /// Final-response schema for `none` or `auto` without tools, or an
+    /// alternative to tool calls for `auto` with tools.
+    /// Ignored when tool choice requires a call (`required` or named).
     pub structured_output_schema: Option<&'a Value>,
     /// Whether generation starts inside a reasoning block opened by the prompt.
     pub starts_in_reasoning: bool,
