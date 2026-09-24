@@ -14,14 +14,14 @@ use std::sync::OnceLock;
 use regex::Regex;
 use serde_json::Value;
 
-static COMMENTARY_BLOCK_REGEX: OnceLock<Regex> = OnceLock::new();
+static TOOL_CALL_BLOCK_REGEX: OnceLock<Regex> = OnceLock::new();
 static COMMENTARY_BLOCK_CLEANUP_REGEX: OnceLock<Regex> = OnceLock::new();
 static COMMENTARY_HEADER_CLEANUP_REGEX: OnceLock<Regex> = OnceLock::new();
 static ANALYSIS_BLOCK_CLEANUP_REGEX: OnceLock<Regex> = OnceLock::new();
 static FINAL_BLOCK_CLEANUP_REGEX: OnceLock<Regex> = OnceLock::new();
 static MESSAGE_CALL_CLEANUP_REGEX: OnceLock<Regex> = OnceLock::new();
 static SPECIAL_TOKEN_REGEX: OnceLock<Regex> = OnceLock::new();
-static COMMENTARY_BLOCK_EOF_REGEX: OnceLock<Regex> = OnceLock::new();
+static TOOL_CALL_BLOCK_EOF_REGEX: OnceLock<Regex> = OnceLock::new();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CompleteHarmonyCall {
@@ -35,21 +35,23 @@ pub(super) struct HarmonySnapshot {
     pub(super) normal_text: String,
 }
 
-pub(super) fn commentary_block_regex() -> &'static Regex {
-    COMMENTARY_BLOCK_REGEX.get_or_init(|| {
+// Match the batch parser's recovery of directed analysis calls as well as
+// canonical commentary calls. A recipient and <|call|> are still required.
+pub(super) fn tool_call_block_regex() -> &'static Regex {
+    TOOL_CALL_BLOCK_REGEX.get_or_init(|| {
         Regex::new(
-            r"(?s)(?:<\|start\|>assistant)?<\|channel\|>commentary to=functions\.(?P<name>[\w.\-]+).*?<\|message\|>(?P<args>.*?)<\|call\|>",
+            r"(?s)(?:<\|start\|>assistant)?<\|channel\|>(?:commentary|analysis) to=functions\.(?P<name>[\w.\-]+).*?<\|message\|>(?P<args>.*?)<\|call\|>",
         )
-        .expect("commentary block regex")
+        .expect("tool call block regex")
     })
 }
 
-pub(super) fn commentary_block_eof_regex() -> &'static Regex {
-    COMMENTARY_BLOCK_EOF_REGEX.get_or_init(|| {
+pub(super) fn tool_call_block_eof_regex() -> &'static Regex {
+    TOOL_CALL_BLOCK_EOF_REGEX.get_or_init(|| {
         Regex::new(
-            r"(?s)(?:<\|start\|>assistant)?<\|channel\|>commentary to=functions\.(?P<name>[\w.\-]+).*?<\|message\|>(?P<args>.*?)(?:<\|call\|>|(?P<eof>\z))",
+            r"(?s)(?:<\|start\|>assistant)?<\|channel\|>(?:commentary|analysis) to=functions\.(?P<name>[\w.\-]+).*?<\|message\|>(?P<args>.*?)(?:<\|call\|>|(?P<eof>\z))",
         )
-        .expect("commentary block EOF regex")
+        .expect("tool call block EOF regex")
     })
 }
 
@@ -74,7 +76,7 @@ pub(super) fn commentary_header_cleanup_regex() -> &'static Regex {
 pub(super) fn analysis_block_cleanup_regex() -> &'static Regex {
     ANALYSIS_BLOCK_CLEANUP_REGEX.get_or_init(|| {
         Regex::new(
-            r"(?s)(?:<\|start\|>assistant)?<\|channel\|>analysis<\|message\|>.*?(?:<\|end\|>|\z)",
+            r"(?s)(?:<\|start\|>assistant)?<\|channel\|>analysis(?:\s+to=functions\.[\w.\-]+.*?)?(?:<\|message\|>.*?(?:<\|call\|>|<\|end\|>|\z)|\z)",
         )
         .expect("analysis block cleanup regex")
     })
@@ -126,6 +128,25 @@ pub(super) fn args_are_complete_json(raw_args: &str) -> bool {
     serde_json::from_str::<Value>(raw_args.trim()).is_ok()
 }
 
+pub(super) fn complete_json_prefix_len(text: &str) -> Option<usize> {
+    let mut values = serde_json::Deserializer::from_str(text).into_iter::<Value>();
+    match values.next() {
+        Some(Ok(_)) => Some(values.byte_offset()),
+        _ => None,
+    }
+}
+
+// Do not let an unfinished envelope borrow a later message's terminator.
+// A complete JSON value can contain literal protocol-looking strings, so skip
+// that value before looking for the next message boundary.
+pub(super) fn next_message_boundary(text: &str) -> Option<usize> {
+    let offset = complete_json_prefix_len(text).unwrap_or(0);
+    ["<|start|>", "<|channel|>", "<|end|>", "<|return|>"]
+        .into_iter()
+        .filter_map(|marker| text[offset..].find(marker).map(|at| offset + at))
+        .min()
+}
+
 pub(super) fn extract_calls_via_regex(
     text: &str,
     allow_eof_recovery: bool,
@@ -134,12 +155,25 @@ pub(super) fn extract_calls_via_regex(
     let mut residual = String::new();
     let mut cursor = 0;
     let regex = if allow_eof_recovery {
-        commentary_block_eof_regex()
+        tool_call_block_eof_regex()
     } else {
-        commentary_block_regex()
+        tool_call_block_regex()
     };
-    for cap in regex.captures_iter(text) {
+    while let Some(cap) = regex.captures_at(text, cursor) {
         let matched = cap.get(0).expect("regex match has full span");
+        let name_match = cap.name("name").expect("tool name");
+        let args_match = cap.name("args").expect("tool arguments");
+        let header_boundary = next_message_boundary(&text[name_match.end()..args_match.start()])
+            .map(|at| name_match.end() + at);
+        let body_boundary =
+            next_message_boundary(args_match.as_str()).map(|at| args_match.start() + at);
+        if let Some(boundary) = header_boundary.or(body_boundary) {
+            // Keep the unfinished envelope for cleanup and resume at the next
+            // message, which may contain a valid call of its own.
+            residual.push_str(&text[cursor..boundary]);
+            cursor = boundary;
+            continue;
+        }
         residual.push_str(&text[cursor..matched.start()]);
         cursor = matched.end();
 

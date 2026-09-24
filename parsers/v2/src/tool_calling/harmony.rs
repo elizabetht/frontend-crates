@@ -5,14 +5,15 @@
 //!
 //! This parser accepts either decoded text or Harmony token IDs and emits
 //! `ToolCallResponseChunk` deltas (id + name first, then `arguments`) from the
-//! `commentary to=functions.NAME` channel. It reparses the accumulated Harmony
+//! `commentary to=functions.NAME` channel, including the directed `analysis`
+//! variant already recovered by the batch parser. It reparses the accumulated Harmony
 //! text after each chunk and emits only newly completed calls, so incomplete
-//! trailing envelopes are suppressed until EOF. At EOF, a directed function call
-//! with complete JSON arguments can recover even if only `<|call|>` is missing.
+//! trailing envelopes are suppressed at EOF. A complete call requires `<|call|>`;
+//! complete JSON arguments alone do not establish a tool-call boundary.
 //!
 //! Why harmony first: it's the one family where token IDs matter for correctness.
 //! The reasoning gpt_oss parser handles the `analysis`/`final` channels; this is
-//! the tool-call half over the `commentary` channel.
+//! the tool-call half for directed `commentary` and `analysis` messages.
 //!
 //! Scope: tool calls only. Reasoning/normal text over the same stream stays with
 //! the reasoning parser. Assembly into the OpenAI wire response (finish_reason,
