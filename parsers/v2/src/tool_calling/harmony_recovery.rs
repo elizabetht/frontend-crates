@@ -13,8 +13,8 @@ use regex::Captures;
 
 use super::harmony_grammar::{
     analysis_block_cleanup_regex, commentary_block_cleanup_regex, commentary_header_cleanup_regex,
-    final_block_cleanup_regex, message_call_cleanup_regex, push_unique, record_special_tokens,
-    special_token_regex,
+    complete_json_prefix_len, final_block_cleanup_regex, message_call_cleanup_regex,
+    next_message_boundary, push_unique, record_special_tokens, special_token_regex,
 };
 
 pub(super) fn strip_harmony_protocol_from_normal_text(text: &str, reason: &'static str) -> String {
@@ -44,13 +44,35 @@ pub(super) fn strip_harmony_protocol_from_normal_text(text: &str, reason: &'stat
         })
         .into_owned();
 
-    let cleaned = analysis_block_cleanup_regex()
-        .replace_all(&cleaned, |caps: &Captures<'_>| {
-            record_special_tokens(&caps[0], &mut stripped);
-            push_unique(&mut stripped, "analysis_envelope".to_string());
-            ""
-        })
-        .into_owned();
+    let mut analysis_cleaned = String::new();
+    let mut cursor = 0;
+    while let Some(caps) = analysis_block_cleanup_regex().captures_at(&cleaned, cursor) {
+        let matched = caps.get(0).expect("analysis envelope");
+        let envelope = matched.as_str();
+        let channel_end =
+            envelope.find("<|channel|>").expect("analysis channel") + "<|channel|>".len();
+        let body_start = envelope
+            .find("<|message|>")
+            .map_or(envelope.len(), |at| at + "<|message|>".len());
+        // The regex can stop at a marker inside an argument string. Recover
+        // the full JSON extent before deciding which bytes belong to this
+        // unfinished envelope, so its tail cannot leak into visible text.
+        let absolute_body_start = matched.start() + body_start;
+        let json_end = absolute_body_start
+            + complete_json_prefix_len(&cleaned[absolute_body_start..]).unwrap_or(0);
+        let candidate_end = matched.end().max(json_end);
+        let envelope = &cleaned[matched.start()..candidate_end];
+        let boundary = next_message_boundary(&envelope[channel_end..body_start])
+            .map(|at| channel_end + at)
+            .or_else(|| next_message_boundary(&envelope[body_start..]).map(|at| body_start + at));
+        let end = boundary.map_or(candidate_end, |at| matched.start() + at);
+        analysis_cleaned.push_str(&cleaned[cursor..matched.start()]);
+        record_special_tokens(&cleaned[matched.start()..end], &mut stripped);
+        push_unique(&mut stripped, "analysis_envelope".to_string());
+        cursor = end;
+    }
+    analysis_cleaned.push_str(&cleaned[cursor..]);
+    let cleaned = analysis_cleaned;
 
     let cleaned = final_block_cleanup_regex()
         .replace_all(&cleaned, |caps: &Captures<'_>| {
