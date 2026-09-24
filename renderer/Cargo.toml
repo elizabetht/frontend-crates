@@ -33,3 +33,7 @@ minijinja-contrib = { workspace = true, features = ["pycompat"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[[example]]
+name = "qwen3_thinking"
+test = true
