@@ -4,6 +4,7 @@
 pub mod base_json_parser;
 pub mod deepseek_v3_1_parser;
 pub mod deepseek_v3_parser;
+pub(crate) mod mistral;
 
 pub use super::{config, response};
 pub use base_json_parser::{detect_tool_call_start_basic_json, try_tool_call_parse_basic_json};

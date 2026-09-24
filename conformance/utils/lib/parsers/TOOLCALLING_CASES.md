@@ -120,9 +120,23 @@ The tag describes the *grammar*, not the parser stage.
 - Schema arg-count mismatch (model emits extra or missing args vs declared schema).
 - Regex timeout / catastrophic-pattern guard, parser-exception containment, long ordinary-content fast-path. vLLM has explicit `test_regex_timeout_handling` for `llama3_json` / `llama4_pythonic` / `pythonic` and `test_extract_tool_calls_streaming_exception_returns_none` for Mistral; Dynamo relies on the Rust `regex` crate's linear-time guarantee but does not pin failure-containment paths.
 
-### Known production gaps (parser missing entirely)
+### Mistral wire-format coverage
 
-- **Mistral v11+ wire format** (`[TOOL_CALLS]name{...args}` name-then-object). Dynamo's `ToolCallConfig::mistral()` and the underlying `base_json_parser.rs` only handle pre-v11 (`[TOOL_CALLS][{name, arguments}]` JSON-array body). v11 is the current production path for Mistral-Small / Mistral-Large; vLLM tests it extensively under the `mistral_tool_parser` fixture. See `TOOLCALLING.fmt.3` for the variant taxonomy.
+Mistral accepts the legacy JSON-array body and v11+ name-then-object calls,
+with or without `[ARGS]` between the name and argument object. The v1 batch
+parser and streaming jail share this grammar; Mistral has no v2/Unified parser.
+
+- **`TOOLCALLING.batch.11.1-1`** Name followed directly by JSON arguments.
+- **`TOOLCALLING.batch.11.1-2`** Explicit `[ARGS]` separator and empty arguments.
+- **`TOOLCALLING.batch.31.1-1`** Repeated name/JSON calls with literal protocol
+  markers inside nested arguments. JSON string content must not split a call.
+
+The generation grammar is defined by [Mistral's grammar builder](https://github.com/mistralai/mistral-common/blob/f3bb6e8be220e44ea37b82467abfac6ac16925f1/src/mistral_common/guidance/grammar_factory.py#L86).
+Complete JSON objects are emitted with verbatim argument bytes; malformed or
+truncated tails are dropped without repair. Unknown names remain parser output,
+and surrounding prose is preserved. `[CALL_ID]` belongs to history serialization,
+not this generation grammar. Transport-boundary and recovery regressions run in
+`parsers/v1/tests/mistral_v11.rs` against both batch and the production jail.
 
 ---
 
@@ -572,8 +586,8 @@ Multiple acceptable spellings for the same semantic. Examples:
 - **Kimi K2**: singular `<|tool_call_section_*|>` vs plural
   `<|tool_calls_section_*|>` section tokens.
 - **Mistral**: pre-v11 (`[TOOL_CALLS][{"name":...,"arguments":...}]`
-  JSON-array body) vs v11+ (`[TOOL_CALLS]name{...args}`
-  name-then-object). The two forms come from different tokenizer
+  JSON-array body) vs v11+ (`[TOOL_CALLS]name[ARGS]{...args}` or
+  `[TOOL_CALLS]name{...args}` name-then-object). The two forms come from different tokenizer
   versions; production traffic mixes both.
 - **Llama 3**: with vs without `<|python_tag|>` start fence — same
   inner JSON, different outer envelope.

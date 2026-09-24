@@ -1679,9 +1679,18 @@ impl JailedStream {
                     }
                 }
 
-                if let Some(end_pos) =
+                // Modern Mistral ends at the complete JSON object, not the
+                // legacy [/TOOL_CALLS] fence. That spelling is legal string
+                // data inside its arguments; let the JSON cursor below decide
+                // when validation is possible instead of releasing mid-string.
+                let modern_mistral = self.tool_call_parser.as_deref() == Some("mistral")
+                    && super::json::mistral::is_name_format(accumulated_content);
+                let end_marker = if modern_mistral {
+                    None
+                } else {
                     self.find_incremental_end_marker(accumulated_content, progress)
-                {
+                };
+                if let Some(end_pos) = end_marker {
                     if self.tool_call_parser.is_none() {
                         return JailCompletion::Complete(CompletedJail {
                             split_pos: end_pos,

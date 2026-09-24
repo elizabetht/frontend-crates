@@ -351,6 +351,9 @@ pub fn find_tool_call_end_position(chunk: &str, parser_str: Option<&str>) -> Opt
                 } else {
                     parser_key
                 };
+                if effective_parser == "mistral" && super::json::mistral::is_name_format(chunk) {
+                    return super::json::mistral::first_call_end(chunk);
+                }
                 // mistral's `[/TOOL_CALLS]` close marker is optional, so the
                 // streaming jail can't simply split at the JSON array `]`: if a
                 // `[/TOOL_CALLS]` arrives in a later chunk it would be stranded

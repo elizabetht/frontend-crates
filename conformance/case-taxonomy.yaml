@@ -120,6 +120,8 @@ suites:
           a: {desc: Redundant outer tool name disagrees with the structured body name, required: false}
           b: {desc: Structured body carries an empty tool name, required: false}
           c: {desc: Generation-primer call omits the outer message header, required: false}
+          "1-1": {desc: Name followed directly by JSON arguments, required: false}
+          "1-2": {desc: Explicit name/arguments separator, required: false}
       "13":
         title: Unknown tool names
         required: true
@@ -146,6 +148,7 @@ suites:
           "": {desc: Group-level n/a placeholder for grammars without string-argument delimiters, required: false}
           a: {desc: Multi-call response with a call separator inside the first argument string, required: false}
           b: {desc: Multi-call response with structural delimiters inside one argument string value, required: false}
+          "1-1": {desc: Name/JSON calls with literal protocol markers inside nested arguments, required: false}
 
   toolcalling.stream:
     prefix: TOOLCALLING.streamv1

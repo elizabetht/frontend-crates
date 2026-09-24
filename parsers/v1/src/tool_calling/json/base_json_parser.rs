@@ -362,6 +362,15 @@ pub fn try_tool_call_parse_basic_json(
     config: &JsonParserConfig,
     _tools: Option<&[ToolDefinition]>,
 ) -> anyhow::Result<(Vec<ToolCallResponse>, Option<String>)> {
+    if config
+        .tool_call_start_tokens
+        .iter()
+        .any(|t| t == "[TOOL_CALLS]")
+        && super::mistral::is_name_format(message)
+    {
+        return Ok(super::mistral::parse(message, config.allow_eof_recovery));
+    }
+
     // Log the config we are using
     tracing::debug!("Using JSON parser config: {:?}", config);
     let trimmed = message.trim();

@@ -139,6 +139,7 @@ markers:
     leak: ["<invoke", "</invoke"]
   mistral:
     pairs: [["[TOOL_CALLS]", "[/TOOL_CALLS]"]]
+    singletons: ["[ARGS]"]
   muse_glimmer:
     pairs: [["<atem:function_calls>", "</atem:function_calls>"]]
     # Channel framing around every routed message; the reasoning stage forwards

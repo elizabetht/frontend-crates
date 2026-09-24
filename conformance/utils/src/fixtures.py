@@ -299,10 +299,11 @@ BATCH_SUB_CASE_GROUPS = [
         ),
     ),
     ("Text interleaving", ("8.a", "8.b", "8.c", "8.d")),
+    ("Header variants", ("11.1-1", "11.1-2")),
     ("Unknown tools", ("13", "13.a", "13.c")),
     (
         "String contents",
-        ("30", "30.a", "30.b", "30.c", "31", "31.a", "31.b"),
+        ("30", "30.a", "30.b", "30.c", "31", "31.a", "31.b", "31.1-1"),
     ),
 ]
 
