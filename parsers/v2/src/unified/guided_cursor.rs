@@ -354,6 +354,14 @@ impl GuidedJsonCursor {
             ':' if self.depth == self.key_depth && self.slot == Slot::Colon => {
                 self.slot = Slot::Value;
             }
+            ',' if self.key_depth == 2 && self.depth == 1 => {
+                // Completion enumerates EVERY root-array element, including
+                // invalid scalar/array values that never close a call object.
+                // Advance at the separator so streamed indices use that same
+                // coordinate system. Commas inside strings/arguments stay data.
+                self.index += 1;
+                self.finish_element();
+            }
             ',' if self.depth == self.key_depth => {
                 self.slot = Slot::Key;
                 self.pending_key = None;
@@ -555,19 +563,13 @@ impl GuidedJsonCursor {
         });
     }
 
-    /// The current call object closed; move to the next element.
+    /// Reset call-local state after an object closes or an array element ends.
     fn finish_element(&mut self) {
         if self.element.committed
             && let Some(record) = self.committed.last_mut()
         {
             record.ambiguous = self.element.ambiguous;
         }
-        // ALWAYS advance, including for an element the cursor could not commit. The
-        // index is the element's position in the payload array, and the completion
-        // path matches committed records against `serde`'s element order — skipping
-        // an uncommittable element here would slide every later call onto the wrong
-        // index.
-        self.index += 1;
         self.element = Element::default();
         self.slot = Slot::Key;
         self.pending_key = None;
