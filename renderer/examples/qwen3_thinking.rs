@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 struct Request {
     chat: CreateChatCompletionRequest,
     template_args: HashMap<String, Value>,
+    add_generation_prompt: bool,
 }
 
 impl OAIChatLikeRequest for Request {
@@ -40,7 +41,7 @@ impl OAIChatLikeRequest for Request {
     }
 
     fn should_add_generation_prompt(&self) -> bool {
-        true
+        self.add_generation_prompt
     }
 
     fn chat_template_args(&self) -> Option<&HashMap<String, Value>> {
@@ -71,13 +72,18 @@ fn render(template_args: HashMap<String, Value>, effort: Option<&str>) -> anyhow
     let request = Request {
         chat: serde_json::from_value(chat)?,
         template_args,
+        add_generation_prompt: true,
     };
+    render_request(&request)
+}
+
+fn render_request(request: &Request) -> anyhow::Result<String> {
     let template: ChatTemplate = serde_json::from_value(json!({
         "chat_template": include_str!("fixtures/qwen3-0.6b.jinja")
     }))?;
     let PromptFormatter::OAI(formatter) =
         PromptFormatter::from_parts(template, ContextMixins::default(), false)?;
-    formatter.render(&request)
+    formatter.render(request)
 }
 
 fn thinking_args(enabled: bool) -> HashMap<String, Value> {
@@ -120,6 +126,44 @@ mod tests {
         assert_eq!(
             render(thinking_args(false), Some("high")).unwrap(),
             render(thinking_args(false), None).unwrap()
+        );
+    }
+
+    #[test]
+    fn thinking_control_changes_the_next_turn_without_rewriting_tool_history() {
+        let args = r#"{ "city": "Paris", "unit": "celsius" }"#;
+        let mut request = Request {
+            chat: serde_json::from_value(json!({
+                "model": "Qwen/Qwen3-0.6B",
+                "messages": [
+                    {"role": "user", "content": "What is the weather in Paris?"},
+                    {"role": "assistant", "content": null, "tool_calls": [{
+                        "id": "call_weather", "type": "function",
+                        "function": {"name": "get_weather", "arguments": args}
+                    }]},
+                    {"role": "tool", "tool_call_id": "call_weather", "content": "18 C"}
+                ]
+            }))
+            .unwrap(),
+            template_args: thinking_args(true),
+            add_generation_prompt: true,
+        };
+        let enabled = render_request(&request).unwrap();
+        request.template_args = thinking_args(false);
+        let disabled = render_request(&request).unwrap();
+        assert_eq!(disabled, format!("{enabled}<think>\n\n</think>\n\n"));
+        assert!(enabled.contains(&format!("\"arguments\": {args}")));
+        assert!(enabled.contains("<tool_response>\n18 C\n</tool_response>"));
+
+        // Suppressing the generation prompt removes the place where this
+        // template applies enable_thinking; it does not rewrite prior turns.
+        request.add_generation_prompt = false;
+        let no_generation_prompt = render_request(&request).unwrap();
+        request.template_args = thinking_args(true);
+        assert_eq!(render_request(&request).unwrap(), no_generation_prompt);
+        assert_eq!(
+            enabled,
+            format!("{no_generation_prompt}<|im_start|>assistant\n")
         );
     }
 }

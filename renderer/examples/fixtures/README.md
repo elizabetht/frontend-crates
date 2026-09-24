@@ -22,6 +22,9 @@ The example sends the same request and tools through the public HF formatter
 with `enable_thinking=true` and `false`. It prints both complete prompts.
 The disabled prompt adds `<think>\n\n</think>\n\n` after the assistant header.
 The tests compare the complete prompts and check that tool instructions survive.
+They also replay a client-supplied tool result, preserve the original argument
+JSON bytes, and verify that the control affects the next generation prompt
+without rewriting earlier turns.
 
 This template reads `enable_thinking`. The HF formatter does not translate
 `reasoning_effort=none` or the `thinking=false` alias into that argument.
