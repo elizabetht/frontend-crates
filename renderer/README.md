@@ -33,6 +33,15 @@ let request: CreateChatCompletionRequest = serde_json::from_str(request_json)?;
 let prompt: String = formatter.render(&request)?;
 ```
 
+## Qwen3 thinking controls
+
+Run `cargo run --locked -p dynamo-renderer --example qwen3_thinking` to compare
+the complete prompts with `enable_thinking=true` and `false`, using a pinned
+Qwen3-0.6B template. The example shows how a consumer passes template arguments
+through `OAIChatLikeRequest`, and tests the exact prompt difference. See the
+[fixture notes](examples/fixtures/README.md) for provenance and model-specific
+limits. No model download or inference server is needed.
+
 ## DeepSeek V4.1
 
 The V4.1 formatter supports text and image messages, tool history, mid-conversation system messages, and numeric reasoning effort. It rejects audio/video content and explicit tool namespace fields; qualified function names are preserved. Generation headers follow the reference encoder and cannot be disabled with `add_generation_prompt`. OpenAI effort names match the reference encoder: `low` is 50, `high` is 75, and `max` is 100; the default is 75. The `xhigh` alias is not supported. Template arguments accept the same names or an integer from 1 to 100. Top-level effort takes precedence over template effort. Set `reasoning_effort` to `none` or the template argument `thinking` to `false` to disable thinking.
