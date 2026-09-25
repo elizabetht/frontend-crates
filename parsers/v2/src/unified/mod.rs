@@ -1200,6 +1200,8 @@ impl GuidedReasoning {
     ) -> Option<(usize, usize)> {
         match self {
             Self::Pair(spec) => {
+                #[cfg(test)]
+                GUIDED_REASONING_SEARCH_BYTES.with(|bytes| bytes.set(bytes.get() + haystack.len()));
                 let at = haystack.find(spec.start)?;
                 let len = reasoning_opener_len(
                     spec.start,
@@ -1247,7 +1249,11 @@ impl GuidedReasoning {
     /// Earliest reasoning closer: `(offset, bytes to consume)`.
     fn find_close(&self, haystack: &str) -> Option<(usize, usize)> {
         match self {
-            Self::Pair(spec) => haystack.find(spec.end).map(|at| (at, spec.end.len())),
+            Self::Pair(spec) => {
+                #[cfg(test)]
+                GUIDED_REASONING_SEARCH_BYTES.with(|bytes| bytes.set(bytes.get() + haystack.len()));
+                haystack.find(spec.end).map(|at| (at, spec.end.len()))
+            }
             Self::Channel(channel) => (channel.find_close)(haystack),
         }
     }
@@ -1679,6 +1685,7 @@ impl GuidedAppendCursor {
 
 #[cfg(test)]
 std::thread_local! {
+    static GUIDED_REASONING_SEARCH_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static GUIDED_APPEND_REPLACEMENTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static GUIDED_PREFIX_EXAMINED_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -2520,25 +2527,26 @@ fn guided_payload_syntax_boundary(
         if at == start {
             continue;
         }
-        // A reasoning marker of EITHER shape ends the payload here. The pair form
-        // is two literals; the channel form has to be asked, because its opener is
-        // a header whose bytes are not a fixed string.
+        // This is an anchored boundary probe: suffix-wide searches at every
+        // JSON byte make a marker-free payload quadratic. Dynamic channels keep
+        // their header resolver; literal pairs can compare at this offset.
         if reasoning
-            .find_open(
-                &input[at..],
+            .open_len_at(
+                input,
+                at,
                 true,
-                // Boundary PROBE, not a routing decision: the question is only
-                // whether a reasoning marker sits at this byte. The permissive scope
-                // is right here — a header the turn would have demoted is still a
-                // marker that ends the payload.
+                // Boundary probing remains permissive for bare channel headers.
                 GuidedChannelState {
                     scope: GuidedTurnScope::Unrouted,
                 },
             )
-            .is_some_and(|(found, _)| found == 0)
-            || reasoning
-                .find_close(&input[at..])
-                .is_some_and(|(found, _)| found == 0)
+            .is_some()
+            || match reasoning {
+                GuidedReasoning::Pair(spec) => input[at..].starts_with(spec.end),
+                GuidedReasoning::Channel(_) => reasoning
+                    .find_close(&input[at..])
+                    .is_some_and(|(found, _)| found == 0),
+            }
             || input[at..].starts_with(invoke_end)
             || control_markers.iter().any(|marker| {
                 control_marker_len_at(input, at, marker, invoke_end, None, &competitors, true)
@@ -6380,6 +6388,45 @@ mod tests {
             probes.get(),
             "call:".len()
         );
+    }
+
+    #[test]
+    fn guided_payload_boundary_does_not_search_each_remaining_suffix() {
+        let reasoning = GuidedReasoning::Pair(ReasoningSpec {
+            start: "<think>",
+            end: "</think>",
+            forced_start: false,
+            start_label: None,
+            preserve_special_tokens: false,
+        });
+        for count in [128, 256] {
+            let input = format!("[{}]", vec!["12345"; count].join(","));
+            GUIDED_REASONING_SEARCH_BYTES.with(|bytes| bytes.set(0));
+            assert_eq!(
+                guided_payload_syntax_boundary(&input, reasoning, &[], "</function>"),
+                None
+            );
+            let searched = GUIDED_REASONING_SEARCH_BYTES.with(Cell::get);
+            assert!(
+                searched <= input.len() * 4,
+                "{searched} suffix bytes searched for {} input bytes",
+                input.len()
+            );
+        }
+        // A literal marker inside an argument is data, while the real marker
+        // outside the value must still stop the payload at its exact offset.
+        let payload = r#"{"text":"é \" </think> <think>"}"#;
+        for marker in ["<think>", "</think>", "</function>"] {
+            assert_eq!(
+                guided_payload_syntax_boundary(
+                    &format!("{payload}{marker}"),
+                    reasoning,
+                    &[],
+                    "</function>"
+                ),
+                Some(payload.len())
+            );
+        }
     }
 
     #[test]
