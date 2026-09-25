@@ -23,3 +23,7 @@ num-traits = { workspace = true }
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }
+
+[[bench]]
+name = "guided_reconciliation"
+harness = false
